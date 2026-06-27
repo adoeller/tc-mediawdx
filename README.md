@@ -2,6 +2,9 @@
 
 A [Total Commander](https://www.ghisler.com/) content plugin (`.wdx`) that exposes video and audio metadata as sortable, searchable columns — duration, resolution, codec, bitrate, aspect ratio, language codes, and more.
 
+![Settings](Settings.png)
+![Dup](Dup.png)
+
 ---
 
 ## Features
