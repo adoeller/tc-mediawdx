@@ -1,10 +1,12 @@
-
 # VideoWDX
 
 A [Total Commander](https://www.ghisler.com/) content plugin (`.wdx`) that exposes video, audio, image, and photo/EXIF metadata as sortable, searchable columns — duration, resolution, codec, bitrate, aspect ratio, GPS location, camera settings, and more.
 
+---
+
 ![Settings](Settings.png)
 ![Dup](Dup.png)
+![custom_tags](custom_tags.png)
 
 ---
 
@@ -170,6 +172,7 @@ All changes are saved to `VideoWDX.ini`. Plugin-affecting settings (fields, back
 | **Media** | Which file types are processed when building fingerprints: `video only`, `image only`, or `video + image`. Enabled only when similarity search is active. |
 | **Backend** | `mediainfo` (recommended) or `ffprobe` |
 | **Backend path** | Path to `MediaInfo.dll` or `ffprobe.exe`. A bare filename is resolved relative to the plugin folder. |
+| **ffmpeg path** | Separate path to `ffmpeg.exe` for visual similarity and previews, with a file picker. Empty = `ffmpeg.exe` next to the selected backend. Relative paths are resolved against the INI folder. |
 | **Database path** | Path to `cache.db`. Leave empty to use the default location (`%APPDATA%\TC_VideoWDX\cache.db`). |
 | **Parse speed** | `fast` — read container header only (sufficient for all fields, very quick). `accurate` — scan the whole file (more precise bitrates, significantly slower). `smart` — read the header first; only rescan a file with a full scan if `VideoBitrate`/`AudioBitrate` came back empty (common for MKV, or MP4 files whose muxer omitted the optional bitrate atom). Slower than `fast` only for the files that actually need it. |
 | **Video / Audio / Image extensions** | Comma-separated list of uppercase extensions the plugin should process. Files with other extensions are ignored without opening. |
@@ -197,6 +200,13 @@ All changes are saved to `VideoWDX.ini`. Plugin-affecting settings (fields, back
 
 Finds files in the database whose partial content hash is identical.
 
+These groups are duplicate candidates. Before either duplicate-delete action
+removes a file, the tool compares every byte against an unselected copy in the
+same group. Both files are protected against writes/renames during verification,
+and deletion uses the verified file handle. A mismatch, inaccessible file, or a
+group with every copy selected is skipped and reported as an error. The retained
+copy is never selected for deletion in the same batch.
+
 | Button | Action |
 |--------|--------|
 | Find duplicates | Query the database for hash-matched groups |
@@ -209,7 +219,7 @@ Files are shown grouped; the group header displays the shared file size and dura
 ### Similars tab
 
 > **Only available when "Enable similarity search" is checked in the Settings tab.**  
-> Requires `ffmpeg.exe` to be available (placed next to the backend or on `PATH`).
+> Requires `ffmpeg.exe`. Select its independent path in Settings; leaving the field empty uses `ffmpeg.exe` next to the backend.
 
 Finds visually similar video and image files using a perceptual hash (pHash) and optionally SSIM.
 
@@ -237,6 +247,7 @@ Similar pairs are shown with a score (higher = more similar). Hovering over a th
 | Key | Default | Description |
 |-----|---------|-------------|
 | `Enabled` | 0 | Show the Similars tab |
+| `FfmpegPath` | *(empty)* | Independent ffmpeg executable; empty = next to backend, relative = relative to the INI folder. Saved from the Settings tab and used by subsequent fingerprint/preview jobs without restarting the tool. |
 | `SimilarDbPath` | *(empty)* | Path to `similar.db`; empty = auto-derive next to `cache.db` |
 | `ThumbMode` | `2x2` | Frame layout for fingerprinting |
 | `GraySize` | 24 | Gray-image downscale size |
@@ -368,6 +379,136 @@ A 64-bit partial hash (xxHash64 of file size + first 64 KB + last 64 KB) is the 
 **Use this when** you frequently rename or reorganize files, or want to find duplicate videos.
 
 > **Note:** Every newly encountered file must be read partially (128 KB maximum) to compute the hash. On a cold cache this is slightly slower than the path strategy, but the hash is computed only once per file.
+
+On the first startup after the short-file hash correction, existing hashes for
+nonempty files smaller than 64 KiB are invalidated once and recomputed when those
+files are encountered. Metadata and file paths remain in the cache.
+
+## Custom tag columns
+
+The **Tag columns** tab discovers custom tags from a sample file using the
+selected backend. With MediaInfo these are scalar properties from the General
+stream's `extra` metadata, including ID3v2 `TXXX` fields such as `TTS_PROVIDER`.
+Technical nested diagnostic objects are excluded. The ffprobe backend exposes
+the file's `format.tags` instead.
+
+1. Click **Read tags from file...** and choose an MP3 or other media file.
+2. Enter a unique column name, such as `TTS`, and a format. Double-clicking a
+   discovered tag inserts its placeholder at the cursor. The preview updates as
+   the format changes.
+3. Click **Add / apply column**, or save directly to apply the current editor.
+   Use **New column** for an additional definition, select a row to edit it, or
+   remove a selected row. Up to 32 custom columns are supported.
+4. Click **Save settings**, then restart Total Commander. The saved column names
+   appear in its content-plugin field selector.
+
+Example format:
+
+```text
+TTS_PROVIDER={TTS_PROVIDER} | {TTS_VOICE} | {TTS_LANGUAGE} | {TTS_TEMPERATURE}
+```
+
+For the example tags this displays `TTS_PROVIDER=Google | Leda | de | 1.2`.
+Text outside placeholders is copied literally. Tag names are matched without
+case sensitivity. Missing tags become empty text; literal labels and separators
+remain. Use `{{` and `}}` for literal braces. Values are inserted once and are
+never treated as additional format expressions.
+
+Enable **Offer AllCustomTags in Total Commander** for a summary field with
+sorted `NAME=value` pairs separated by `; `. Its filter accepts `*` and `?`, for
+example `TTS_*`; an empty filter means all discovered custom tags.
+
+Definitions are stored independently of the raw tag data:
+
+```ini
+[CustomTags]
+AllTagsEnabled=1
+Filter=TTS_*
+
+[CustomTag1]
+Name=TTS
+Format=TTS_PROVIDER={TTS_PROVIDER} | {TTS_VOICE}
+```
+
+Scans automatically cache discovered tags in SQLite. When a new custom column
+first encounters a legacy cache row without tags, it re-reads that file once.
+Subsequent format changes use the cached tags without re-extracting the file.
+Files and their ID3 tags are never modified by this feature.
+
+## Metadata for all supported formats
+
+The **Metadata columns** tab reads the available fields of the chosen image,
+audio or video file. It uses the configured backend and supplements image data
+with native text, EXIF, IPTC and XMP readers. This applies to all formats accepted
+by the plugin's configured extension lists and backend, including JPEG, PNG,
+TIFF, WebP, PCM in WAV/AIFF, compressed audio and video containers.
+Only populated fields are listed; image files do not receive audio/video fields,
+and audio files without video streams do not receive video fields.
+Headerless raw PCM cannot supply sample rate/channel information by itself.
+
+Double-click any field to insert its exact placeholder. New columns receive a
+unique suggested name (`Metadata`, `Metadata2`, etc. for qualified field names).
+To edit an existing column, select it in the saved-column list. Reusing an
+existing name for a new column produces a specific duplicate-name message.
+
+Examples:
+
+```text
+{ImgWidth}x{ImgHeight} | {EXIF.IFD0.Artist}
+{AudioFormat} / {AudioSamplingRate} Hz / {AudioChannels} channels
+{VideoCodec} | {Width}x{Height} | {AudioCodec}
+{TTS_MODEL} | {TTS_TEMPERATURE} | {TTS_VOICE}
+```
+
+Canonical names such as `ImgWidth` and `AudioSamplingRate` are supplemented by
+backend-specific names such as `General.Format`, `Audio.Format`, or
+`General.format_name`. Additional streams have indexed prefixes (`Audio[1]`).
+Image metadata uses `EXIF.IFD0.Artist`, `IPTC.*`, `XMP.*` and `PNG.*` prefixes;
+PNG text also exposes its original keyword directly.
+When a backend-qualified name and a short custom name contain the same value,
+discovery and summary columns show only the short name. Both names still work
+in templates (for example `{TTS_MODEL}` and `{General.extra.TTS_MODEL}`). This
+also applies to ffprobe `General.tags.*` and native `PNG.*` text aliases. Different
+values and backend fields without a short alias are retained. Existing cached
+inventories are filtered on display; no rescan is needed for this correction. Available names depend on
+the file and chosen backend. No empty placeholders are shown in discovery;
+missing fields in a saved format still render as empty text.
+
+Enable **Offer AllMetadata in Total Commander** to expose the complete inventory
+as sorted `field=value` pairs in the `AllMetadata` column. Its separate wildcard
+filter can select `*`, `Image.*`, `EXIF.*`, etc. `AllCustomTags` retains its original
+custom-tag-only meaning. Both summary columns can be enabled independently.
+
+```ini
+[Metadata]
+Enabled=1
+Filter=*
+```
+
+Sample-file discovery runs in the background with a cancellable helper process.
+While reading, the file button becomes **Cancel**. Reads have a 15-second limit;
+closing the settings window also cancels the helper and its backend processes.
+The chooser offers configured media extensions. Executable/script extensions
+are rejected before launching a backend; Windows executables disguised with a
+media extension are rejected by their file signature. A failed read clears the
+sample list/preview without changing saved column definitions.
+
+The complete inventory is cached independently of enabled fixed TC fields.
+Existing cache rows are upgraded on the next metadata-column request. Template
+changes use the persisted inventory; changing the backend requires a rescan.
+Restart Total Commander after saving column definitions or enabling summaries.
+
+## Development verification
+
+Run `Test\run_test.bat` to rebuild and verify the 32-bit and 64-bit plugin and
+maintenance tool using synthetic fixtures. See [Test/README.md](Test/README.md)
+for requirements, test coverage and isolation, and
+[Test/VERIFICATION.md](Test/VERIFICATION.md) for the completed verification.
+
+The GUI's scan and fingerprint controllers live in `uToolScan.pas` and
+`uToolFingerprint.pas`; they report progress/results through callbacks and have
+no dependency on the main form. `uToolDuplicates.pas` owns duplicate-group deletion
+policy, and `uDuplicateFiles.pas` performs locked full-file verification/deletion.
 
 ---
 
